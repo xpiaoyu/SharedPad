@@ -59,6 +59,28 @@ io.on('connection', (socket) => {
     socket.to(currentRoom).emit('draw', data);
   });
 
+  socket.on('draw-batch', (batch) => {
+    if (!currentRoom || !Array.isArray(batch) || batch.length === 0) return;
+    console.log(`[Room ${currentRoom}] Received batch from ${socket.id}:`, batch.length, 'items');
+    const room = getRoom(currentRoom);
+    // Add all batched data to history
+    room.history.push(...batch);
+    // Broadcast batch to others in the room
+    socket.to(currentRoom).emit('draw-batch', batch);
+    console.log(`[Room ${currentRoom}] Broadcasting batch to ${room.users.size - 1} other users`);
+  });
+
+  socket.on('draw-stroke', (stroke) => {
+    if (!currentRoom || !stroke || !stroke.points || stroke.points.length === 0) return;
+    console.log(`[Room ${currentRoom}] Received stroke from ${socket.id}:`, stroke.points.length, 'points');
+    const room = getRoom(currentRoom);
+    // Store stroke in history
+    room.history.push({ type: 'stroke', data: stroke });
+    // Broadcast stroke to others in the room
+    socket.to(currentRoom).emit('draw-stroke', stroke);
+    console.log(`[Room ${currentRoom}] Broadcasting stroke to ${room.users.size - 1} other users`);
+  });
+
   socket.on('clear', () => {
     if (!currentRoom) return;
     const room = getRoom(currentRoom);

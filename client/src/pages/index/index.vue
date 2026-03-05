@@ -65,8 +65,11 @@ import {
   getSocket,
   joinRoom,
   sendDraw,
+  flushDraw,
   sendClear,
   onDraw,
+  onDrawBatch,
+  onDrawStroke,
   onClear,
   onHistory,
   onUserCount,
@@ -134,6 +137,8 @@ export default {
 
       onUserCount((count) => { this.userCount = count; });
       onDraw((data) => { this.drawRemote(data); });
+      onDrawBatch((batch) => { this.drawRemoteBatch(batch); });
+      onDrawStroke((stroke) => { this.drawRemoteStroke(stroke); });
       onHistory((history) => { this.replayHistory(history); });
       onClear(() => { this.doClear(); });
       onReconnect(() => { joinRoom(this.roomId); });
@@ -141,8 +146,8 @@ export default {
 
     normalize(x, y) {
       return {
-        x: x / this.canvasWidth,
-        y: y / this.canvasHeight,
+        x: Math.round((x / this.canvasWidth) * 1000000) / 1000000,
+        y: Math.round((y / this.canvasHeight) * 1000000) / 1000000,
       };
     },
 
@@ -237,6 +242,9 @@ export default {
         lineWidth: this.currentWidth,
         userId: this.userId,
       });
+
+      // Force flush remaining batched data
+      flushDraw();
     },
 
     drawLine(x1, y1, x2, y2, color, lineWidth) {
@@ -272,22 +280,49 @@ export default {
       }
     },
 
+    drawRemoteBatch(batch) {
+      if (!Array.isArray(batch)) return;
+      for (const data of batch) {
+        this.drawRemote(data);
+      }
+    },
+
+    drawRemoteStroke(stroke) {
+      if (!stroke || !stroke.points || stroke.points.length < 2) return;
+
+      const { userId, color, lineWidth, points } = stroke;
+
+      // Draw lines between consecutive points
+      for (let i = 1; i < points.length; i++) {
+        const prev = this.denormalize(points[i - 1][0], points[i - 1][1]);
+        const curr = this.denormalize(points[i][0], points[i][1]);
+        this.drawLine(prev.x, prev.y, curr.x, curr.y, color, lineWidth);
+      }
+    },
+
     replayHistory(history) {
       this.doClear();
 
       const userPositions = {};
-      for (const data of history) {
-        const pos = this.denormalize(data.x, data.y);
-        if (data.type === 'start') {
-          userPositions[data.userId] = { x: pos.x, y: pos.y };
-        } else if (data.type === 'move') {
-          const last = userPositions[data.userId];
-          if (last) {
-            this.drawLine(last.x, last.y, pos.x, pos.y, data.color, data.lineWidth);
+      for (const item of history) {
+        // New stroke format
+        if (item.type === 'stroke' && item.data) {
+          this.drawRemoteStroke(item.data);
+        }
+        // Old individual point format (backward compatibility)
+        else if (item.x !== undefined && item.y !== undefined) {
+          const pos = this.denormalize(item.x, item.y);
+          if (item.type === 'start') {
+            userPositions[item.userId] = { x: pos.x, y: pos.y };
+          } else if (item.type === 'move') {
+            const last = userPositions[item.userId];
+            if (last) {
+              this.drawLine(last.x, last.y, pos.x, pos.y, item.color, item.lineWidth);
+            }
+            userPositions[item.userId] = { x: pos.x, y: pos.y };
+          } else if (item.type === 'end') {
+            delete userPositions[item.userId];
           }
-          userPositions[data.userId] = { x: pos.x, y: pos.y };
-        } else if (data.type === 'end') {
-          delete userPositions[data.userId];
         }
       }
     },
